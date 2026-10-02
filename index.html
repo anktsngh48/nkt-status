@@ -265,13 +265,13 @@ function renderPicture(designImg, profile) {
 
     // footer background + thin divider line
     const bg = ctx.createLinearGradient(0, H, W, H + footerH);
-    bg.addColorStop(0, '#a8431a');
-    bg.addColorStop(1, '#ee7a2b');
+    bg.addColorStop(0, '#fff3e6');
+    bg.addColorStop(1, '#ffd3a8');
     ctx.fillStyle = bg;
     ctx.fillRect(0, H, W, footerH);
     const bar = ctx.createLinearGradient(0, 0, W, 0);
-    bar.addColorStop(0, '#ffe2b0');
-    bar.addColorStop(1, '#ffa24d');
+    bar.addColorStop(0, '#f58220');
+    bar.addColorStop(1, '#d94f00');
     ctx.fillStyle = bar;
     ctx.fillRect(0, H, W, Math.max(4, Math.round(W * 0.007)));
 
@@ -307,11 +307,11 @@ function renderPicture(designImg, profile) {
       ctx.beginPath();
       ctx.arc(startX + d / 2, cy, d / 2, 0, Math.PI * 2);
       ctx.lineWidth = Math.max(2, d * 0.04);
-      ctx.strokeStyle = '#ffe2b0';
+      ctx.strokeStyle = '#f26b1d';
       ctx.stroke();
 
       // name
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#3b1a08';
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'left';
       ctx.fillText(profile.name, startX + d + gap, cy);
