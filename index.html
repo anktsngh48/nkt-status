@@ -107,7 +107,7 @@
       <div class="center"><strong id="setup-title">Let's set you up (one time only)</strong></div>
 
       <label for="name-input">Your name</label>
-      <input type="text" id="name-input" placeholder="e.g. Ankit Singh" maxlength="40" autocomplete="name">
+      <input type="text" id="name-input" placeholder="e.g. Kalash Sharma" maxlength="40" autocomplete="name">
 
       <label for="photo-input">Your photo</label>
       <input type="file" id="photo-input" accept="image/*">
@@ -121,12 +121,13 @@
     <!-- Result -->
     <div id="view-result" hidden>
       <canvas id="canvas"></canvas>
-      <button id="btn-download">Download picture</button>
+      <button id="btn-download">⬇ Download picture</button>
       <button id="btn-share" class="secondary" hidden>Share…</button>
       <button id="btn-edit" class="secondary">Change my name / photo</button>
     </div>
 
   </div>
+  <p id="debug" class="hint center" hidden></p>
 </div>
 
 <script>
@@ -138,6 +139,12 @@
    ============================================================ */
 const CONFIG = {
   SHEET_CSV_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRpiPfu6RDnLOXe7METJiv5JGuDej6dOMCJ56-HTCsTg24oJh3agKhGjqjqSbc5StaDrGRKHObB6pL8/pub?gid=0&single=true&output=csv",
+  // OPTIONAL but recommended: live data straight from the sheet (no waiting for Google's "publish" delay).
+  // Paste the sheet's own ID here: it's the long text between /d/ and /edit in the sheet's normal address.
+  // The sheet must be shared as "Anyone with the link can view". Leave "" to use only the published CSV above.
+  SHEET_ID: "",
+  SHEET_GID: "0",          // the number after gid= in the sheet's address (0 is the first tab)
+  NEWEST_ROW: "bottom",    // "bottom" = newest link is the lowest row; use "top" if you add new rows above old ones
   MAX_WIDTH: 2000          // large designs are scaled down to this width
 };
 
@@ -182,25 +189,52 @@ function extractDriveId(text) {
   return m ? m[1] : null;
 }
 
-async function getDesignIdFromSheet() {
-  const base = CONFIG.SHEET_CSV_URL;
-  if (!base || base.includes('PASTE_YOUR')) {
+async function getDesignFromSheet() {
+  // Sources are tried in order: the live sheet first (if SHEET_ID is set), then the published CSV
+  const sources = [];
+  if (CONFIG.SHEET_ID) {
+    sources.push({
+      name: 'live sheet',
+      url: 'https://docs.google.com/spreadsheets/d/' + CONFIG.SHEET_ID + '/gviz/tq?tqx=out:csv&gid=' + encodeURIComponent(CONFIG.SHEET_GID)
+    });
+  }
+  if (CONFIG.SHEET_CSV_URL && !CONFIG.SHEET_CSV_URL.includes('PASTE_YOUR')) {
+    sources.push({ name: 'published CSV', url: CONFIG.SHEET_CSV_URL });
+  }
+  if (!sources.length) {
     throw new Error('The sheet link has not been set up yet. Please ask the admin to add it in index.html (CONFIG → SHEET_CSV_URL).');
   }
-  const url = base + (base.includes('?') ? '&' : '?') + 't=' + Date.now();   // avoids old cached copies
-  let res;
-  try { res = await fetch(url, { cache: 'no-store' }); }
-  catch (e) { throw new Error('Could not reach the design sheet. Check your internet connection.'); }
-  if (!res.ok) throw new Error('Could not read the design sheet (error ' + res.status + '). Is it published to the web?');
-  const rows = parseCSV(await res.text());
-  // Use the LAST row that contains a Google Drive link, so the newest link wins
-  for (let i = rows.length - 1; i >= 0; i--) {
-    for (const cell of rows[i]) {
-      const id = extractDriveId(cell);
-      if (id) return id;
+
+  let lastProblem = 'Could not read the design sheet.';
+  for (const src of sources) {
+    // a fresh random value on every load so nothing old is reused
+    const url = src.url + (src.url.includes('?') ? '&' : '?') + 'nocache=' + Date.now() + Math.random().toString(36).slice(2, 8);
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) { lastProblem = 'Could not read the design sheet (error ' + res.status + ').'; continue; }
+      const rows = parseCSV(await res.text());
+      const order = rows.map((_, i) => i);
+      if (CONFIG.NEWEST_ROW !== 'top') order.reverse();      // default: look from the bottom up
+      for (const i of order) {
+        for (const cell of rows[i]) {
+          const id = extractDriveId(cell);
+          if (id) return { id: id, row: i + 1, source: src.name };
+        }
+      }
+      lastProblem = 'No Google Drive image link was found in the sheet.';
+    } catch (e) {
+      lastProblem = 'Could not reach the design sheet. Check your internet connection.';
     }
   }
-  throw new Error('No Google Drive image link was found in the sheet.');
+  throw new Error(lastProblem);
+}
+
+// Add ?debug to the page address to see which sheet row was used
+function showDebug(found) {
+  if (!/[?&]debug\b/.test(location.search)) return;
+  const el = $('debug');
+  el.textContent = 'Debug: used ' + found.source + ', row ' + found.row + ', file id ' + found.id.slice(0, 8) + '…';
+  el.hidden = false;
 }
 
 /* ---------- load the design image from Google Drive ---------- */
@@ -247,78 +281,95 @@ function fileToSquareDataUrl(file, size) {
   });
 }
 
+/* ---------- footer (name + photo) ---------- */
+const BAR_FONT = '"Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+function accentH(W) { return Math.max(4, Math.round(W * 0.007)); }
+
+function paintBarBase(c, y, W, h) {
+  const bg = c.createLinearGradient(0, y, W, y + h);
+  bg.addColorStop(0, '#fff3e6');
+  bg.addColorStop(1, '#ffd3a8');
+  c.fillStyle = bg;
+  c.fillRect(0, y, W, h);
+}
+function paintAccent(c, y, W) {
+  const bar = c.createLinearGradient(0, 0, W, 0);
+  bar.addColorStop(0, '#f58220');
+  bar.addColorStop(1, '#d94f00');
+  c.fillStyle = bar;
+  c.fillRect(0, y, W, accentH(W));
+}
+// Footer: orange line on top, then photo + name centred in the space below it
+function paintFooter(c, y, W, h, profile, photo) {
+  paintBarBase(c, y, W, h);
+  paintAccent(c, y, W);
+  const line = accentH(W);
+  const avail = h - line;                 // space left under the orange line
+  const pad = avail * 0.16;               // same padding above and below
+  const d = avail - pad * 2;              // photo diameter
+  const gap = avail * 0.22;
+
+  let fontSize = avail * 0.32;
+  const maxTextW = W * 0.8 - d - gap;
+  c.font = '700 ' + fontSize + 'px ' + BAR_FONT;
+  while (c.measureText(profile.name).width > maxTextW && fontSize > 10) {
+    fontSize -= 2;
+    c.font = '700 ' + fontSize + 'px ' + BAR_FONT;
+  }
+  const textW = c.measureText(profile.name).width;
+  const startX = (W - (d + gap + textW)) / 2;
+  const cy = y + line + avail / 2;
+
+  c.save();
+  c.beginPath();
+  c.arc(startX + d / 2, cy, d / 2, 0, Math.PI * 2);
+  c.closePath();
+  c.clip();
+  c.drawImage(photo, startX, cy - d / 2, d, d);
+  c.restore();
+
+  c.beginPath();
+  c.arc(startX + d / 2, cy, d / 2, 0, Math.PI * 2);
+  c.lineWidth = Math.max(2, d * 0.04);
+  c.strokeStyle = '#f26b1d';
+  c.stroke();
+
+  c.fillStyle = '#3b1a08';
+  c.textBaseline = 'middle';
+  c.textAlign = 'left';
+  c.fillText(profile.name, startX + d + gap, cy);
+}
+
 /* ---------- draw the final picture ---------- */
-function renderPicture(designImg, profile) {
-  return new Promise(resolve => {
-    const scale = Math.min(1, CONFIG.MAX_WIDTH / designImg.naturalWidth);
-    const W = Math.round(designImg.naturalWidth * scale);
-    const H = Math.round(designImg.naturalHeight * scale);
-    const footerH = Math.round(W * 0.13);
-
-    const canvas = $('canvas');
-    canvas.width = W;
-    canvas.height = H + footerH;
-    const ctx = canvas.getContext('2d');
-
-    // design on top
-    ctx.drawImage(designImg, 0, 0, W, H);
-
-    // footer background + thin divider line
-    const bg = ctx.createLinearGradient(0, H, W, H + footerH);
-    bg.addColorStop(0, '#fff3e6');
-    bg.addColorStop(1, '#ffd3a8');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, H, W, footerH);
-    const bar = ctx.createLinearGradient(0, 0, W, 0);
-    bar.addColorStop(0, '#f58220');
-    bar.addColorStop(1, '#d94f00');
-    ctx.fillStyle = bar;
-    ctx.fillRect(0, H, W, Math.max(4, Math.round(W * 0.007)));
-
-    const pad = footerH * 0.16;
-    const d = footerH - pad * 2;            // photo diameter
-    const gap = footerH * 0.22;
-
-    // fit the name text
-    let fontSize = footerH * 0.32;
-    const maxTextW = W * 0.8 - d - gap;
-    ctx.font = '700 ' + fontSize + 'px "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
-    while (ctx.measureText(profile.name).width > maxTextW && fontSize > 10) {
-      fontSize -= 2;
-      ctx.font = '700 ' + fontSize + 'px "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
-    }
-    const textW = ctx.measureText(profile.name).width;
-    const groupW = d + gap + textW;
-    const startX = (W - groupW) / 2;
-    const cy = H + footerH / 2;
-
-    const photo = new Image();
-    photo.onload = () => {
-      // circular photo
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(startX + d / 2, cy, d / 2, 0, Math.PI * 2);
-      ctx.closePath();
-      ctx.clip();
-      ctx.drawImage(photo, startX, cy - d / 2, d, d);
-      ctx.restore();
-
-      // ring around the photo
-      ctx.beginPath();
-      ctx.arc(startX + d / 2, cy, d / 2, 0, Math.PI * 2);
-      ctx.lineWidth = Math.max(2, d * 0.04);
-      ctx.strokeStyle = '#f26b1d';
-      ctx.stroke();
-
-      // name
-      ctx.fillStyle = '#3b1a08';
-      ctx.textBaseline = 'middle';
-      ctx.textAlign = 'left';
-      ctx.fillText(profile.name, startX + d + gap, cy);
-      resolve();
-    };
-    photo.src = profile.photo;
+let photoCache = { src: null, img: null };
+function getPhoto(src) {
+  if (photoCache.src === src && photoCache.img) return Promise.resolve(photoCache.img);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => { photoCache = { src: src, img: img }; resolve(img); };
+    img.onerror = () => reject(new Error('Could not load your photo.'));
+    img.src = src;
   });
+}
+
+let renderToken = 0;
+async function renderPicture(designImg, profile) {
+  const token = ++renderToken;
+  const photo = await getPhoto(profile.photo);
+  if (token !== renderToken) return;       // a newer drawing request replaced this one
+
+  const scale = Math.min(1, CONFIG.MAX_WIDTH / designImg.naturalWidth);
+  const W = Math.round(designImg.naturalWidth * scale);
+  const H = Math.round(designImg.naturalHeight * scale);
+  const footerH = Math.round(W * 0.13);
+
+  const canvas = $('canvas');
+  canvas.width = W;
+  canvas.height = H + footerH;
+  const ctx = canvas.getContext('2d');
+
+  ctx.drawImage(designImg, 0, 0, W, H);
+  paintFooter(ctx, H, W, footerH, profile, photo);
 }
 
 /* ---------- screens ---------- */
@@ -346,7 +397,8 @@ let currentProfile = null;   // kept in memory too, in case the browser blocks s
 async function showResult() {
   const profile = currentProfile || loadProfile();
   show('result');
-  await renderPicture(designImg, profile);
+  try { await renderPicture(designImg, profile); }
+  catch (e) { showError(e.message); return; }
   $('btn-share').hidden = !(navigator.canShare && navigator.share);
 }
 
@@ -360,8 +412,9 @@ function fileName() {
 async function init() {
   show('loading');
   try {
-    const id = await getDesignIdFromSheet();
-    designImg = await loadDesign(id);
+    const found = await getDesignFromSheet();
+    showDebug(found);
+    designImg = await loadDesign(found.id);
   } catch (e) {
     showError(e.message);
     return;
@@ -398,6 +451,7 @@ $('btn-save').addEventListener('click', () => {
 $('btn-cancel').addEventListener('click', showResult);
 $('btn-edit').addEventListener('click', () => showSetup(currentProfile || loadProfile()));
 $('btn-retry').addEventListener('click', init);
+
 
 $('btn-download').addEventListener('click', () => {
   $('canvas').toBlob(blob => {
